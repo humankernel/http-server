@@ -26,9 +26,6 @@ func main() {
 		}
 		go handleConnection(conn)
 	}
-
-	fmt.Println("Successfully accepted incoming conection.")
-
 }
 
 func handleConnection(conn net.Conn) {
@@ -86,6 +83,14 @@ func handleConnection(conn net.Conn) {
 	case strings.HasPrefix(path, "/user-agent"):
 		body := userAgent
 		res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	case strings.HasPrefix(path, "/files"):
+		filename := path[len("/files/"):]
+		dat, err := os.ReadFile("/tmp/" + filename)
+		if err != nil {
+			res = "HTTP/1.1 404 Not Found\r\n\r\n"
+		} else {
+			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(dat), dat)
+		}
 	default:
 		res = "HTTP/1.1 404 Not Found\r\n\r\n"
 	}
