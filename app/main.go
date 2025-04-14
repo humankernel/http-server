@@ -78,14 +78,15 @@ func handleConnection(conn net.Conn) {
 	case path == "/":
 		res = "HTTP/1.1 200 OK\r\n\r\n"
 	case strings.HasPrefix(path, "/echo/"):
-		body := path[len("/echo/"):]
+		body := strings.TrimPrefix(path, "/echo/")
 		res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	case strings.HasPrefix(path, "/user-agent"):
 		body := userAgent
 		res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	case strings.HasPrefix(path, "/files"):
-		filename := path[len("/files/"):]
-		dat, err := os.ReadFile("/tmp/" + filename)
+		dir := os.Args[2]
+		filename := strings.TrimPrefix(path, "/files/")
+		dat, err := os.ReadFile(dir + filename)
 		if err != nil {
 			res = "HTTP/1.1 404 Not Found\r\n\r\n"
 		} else {
