@@ -15,7 +15,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer listener.Close()
-
 	fmt.Println("Server listening on port 4221")
 
 	conn, err := listener.Accept()
@@ -35,19 +34,19 @@ func main() {
 			fmt.Println("Error reading: ", err.Error())
 			os.Exit(1)
 		}
-		msg := buf[:n]
-		elements := strings.Split(string(msg), " ")
-		if len(elements) >= 1 {
-			url := elements[1]
-			fmt.Println(url)
 
-			switch url {
-			case "/":
-				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-			default:
-				conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
-			}
+		url := strings.Split(string(buf[:n]), " ")[1]
+
+		var res string
+		if url == "/" {
+			res = "HTTP/1.1 200 OK\r\n\r\n"
+		} else if strings.Contains(url, "/echo/") {
+			content := strings.Split(url, "/")[2]
+			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(content), content)
+		} else {
+			res = "HTTP/1.1 404 Not Found\r\n\r\n"
 		}
+		conn.Write([]byte(res))
 	}
 
 	fmt.Println("sending msg to client..")
