@@ -71,9 +71,27 @@ func handleConnection(conn net.Conn) {
 	}
 
 	userAgent := headers["User-Agent"]
+	reqBody := ""
+
+	// Read body if POST/UPDATE/DELETE
+	if method != "GET" {
+		contentLength := 0
+		if v, ok := headers["Content-Length"]; ok {
+			fmt.Sscanf(v, "%d", &contentLength)
+		}
+
+		if contentLength > 0 {
+			body := make([]byte, contentLength)
+			_, err := reader.Read(body)
+			if err != nil {
+				fmt.Println("Error reading body", err)
+				return
+			}
+			reqBody = string(body)
+		}
+	}
 
 	res := ""
-
 	switch {
 	case path == "/":
 		res = "HTTP/1.1 200 OK\r\n\r\n"
@@ -86,11 +104,21 @@ func handleConnection(conn net.Conn) {
 	case strings.HasPrefix(path, "/files"):
 		dir := os.Args[2]
 		filename := strings.TrimPrefix(path, "/files/")
-		dat, err := os.ReadFile(dir + filename)
-		if err != nil {
-			res = "HTTP/1.1 404 Not Found\r\n\r\n"
-		} else {
-			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(dat), dat)
+		switch method {
+		case "GET":
+			dat, err := os.ReadFile(dir + filename)
+			if err != nil {
+				res = "HTTP/1.1 404 Not Found\r\n\r\n"
+			} else {
+				res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(dat), dat)
+			}
+		case "POST":
+			err := os.WriteFile(dir+filename, []byte(reqBody), 0644)
+			if err != nil {
+				res = "HTTP/1.1 404 Not Found\r\n\r\n"
+			} else {
+				res = "HTTP/1.1 201 Created\r\n\r\n"
+			}
 		}
 	default:
 		res = "HTTP/1.1 404 Not Found\r\n\r\n"
