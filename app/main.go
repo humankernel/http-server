@@ -95,7 +95,13 @@ func handleConnection(conn net.Conn) {
 		res = "HTTP/1.1 200 OK\r\n\r\n"
 	case strings.HasPrefix(path, "/echo/"):
 		body := strings.TrimPrefix(path, "/echo/")
-		if acceptEncoding == "gzip" {
+		// save encodings into a map
+		encodingsList := strings.Split(acceptEncoding, ", ")
+		encodings := make(map[string]bool)
+		for _, v := range encodingsList {
+			encodings[v] = true
+		}
+		if encodings["gzip"] {
 			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 		} else {
 			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
