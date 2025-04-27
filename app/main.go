@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -33,23 +34,21 @@ func handleConnection(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 
-	// Read RequestLine (method, path, http-version)
+	// Read RequestLine (Method, Path, HTTP-version)
 	requestLine, err := reader.ReadString('\n')
 	if err != nil {
 		fmt.Println("Error reading request data: ", err.Error())
 		return
 	}
-	req := strings.TrimSpace(requestLine)
-	reqItems := strings.Split(req, " ")
+	requestLine = strings.TrimSpace(requestLine)
+	reqItems := strings.Split(requestLine, " ")
 	if len(reqItems) < 2 {
 		fmt.Println("Malformed request line: ", requestLine)
 		return
 	}
 	method, path := reqItems[0], reqItems[1]
 
-	fmt.Println(method, path)
-
-	// Read headers one by one
+	// Read Headers (one by one)
 	headers := make(map[string]string)
 	for {
 		line, err := reader.ReadString('\n')
@@ -69,21 +68,19 @@ func handleConnection(conn net.Conn) {
 			headers[strings.TrimSpace(headerParts[0])] = strings.TrimSpace(headerParts[1])
 		}
 	}
-
 	userAgent := headers["User-Agent"]
-	reqBody := ""
+	acceptEncoding := headers["Accept-Encoding"]
 
-	// Read body if POST/UPDATE/DELETE
+	// Read Body (for POST/UPDATE/DELETE)
+	var reqBody string
 	if method != "GET" {
-		contentLength := 0
+		var contentLength int
 		if v, ok := headers["Content-Length"]; ok {
-			fmt.Sscanf(v, "%d", &contentLength)
+			contentLength, _ = strconv.Atoi(v)
 		}
-
 		if contentLength > 0 {
 			body := make([]byte, contentLength)
-			_, err := reader.Read(body)
-			if err != nil {
+			if _, err := reader.Read(body); err != nil {
 				fmt.Println("Error reading body", err)
 				return
 			}
@@ -91,13 +88,18 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
-	res := ""
+	// Create Response
+	var res string
 	switch {
 	case path == "/":
 		res = "HTTP/1.1 200 OK\r\n\r\n"
 	case strings.HasPrefix(path, "/echo/"):
 		body := strings.TrimPrefix(path, "/echo/")
-		res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		if acceptEncoding == "gzip" {
+			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		} else {
+			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		}
 	case strings.HasPrefix(path, "/user-agent"):
 		body := userAgent
 		res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
@@ -125,11 +127,10 @@ func handleConnection(conn net.Conn) {
 	}
 
 	// Write the res to the client
-	_, err = conn.Write([]byte(res))
-	if err != nil {
+	if _, err = conn.Write([]byte(res)); err != nil {
 		fmt.Println("Error writing response: ", err)
 		return
 	}
 
-	fmt.Println("Response sent to client.")
+	fmt.Println("Response succesfully sended to client.")
 }
