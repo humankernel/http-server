@@ -6,28 +6,29 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 func main() {
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
-		fmt.Println("Failed to bind to port 4221")
+		log.Println("Failed to bind to port 4221")
 		os.Exit(1)
 	}
 	defer l.Close()
 
-	fmt.Println("Server listening on port 4221")
-
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection: ", err.Error())
-			continue // continue accepting conections
+			log.Println("Error accepting connection: ", err.Error())
+			// Continue accepting connections instead of exiting
+			continue
 		}
 		go handleConnection(conn)
 	}
@@ -37,132 +38,175 @@ func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
-	// debug persisten conn: sudo tcpdump -i any -n host localhost
 	for {
-		// read timeout to detech idle connections
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-		// Read RequestLine (Method, Path, HTTP-version)
-		requestLine, err := reader.ReadString('\n')
+		// Read Request
+		method, path, reqHeaders, reqBody, err := readRequest(reader)
 		if err != nil {
 			if err == io.EOF {
-				return // client closed connection
-			}
-			fmt.Println("Error reading request data: ", err.Error())
-			return
-		}
-		requestLine = strings.TrimSpace(requestLine)
-		reqItems := strings.Split(requestLine, " ")
-		if len(reqItems) < 2 {
-			fmt.Println("Malformed request line: ", requestLine)
-			return
-		}
-		method, path := reqItems[0], reqItems[1]
-
-		// Read Headers
-		headers := make(map[string]string)
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				fmt.Println("Error reading headers: ", err)
-				return
-			}
-
-			line = strings.TrimSpace(line)
-			if line == "" {
-				break // End of headers
-			}
-
-			headerParts := strings.SplitN(line, ":", 2)
-			if len(headerParts) == 2 {
-				headers[strings.TrimSpace(headerParts[0])] = strings.TrimSpace(headerParts[1])
-			}
-		}
-
-		// check for `Connection: Close` header
-		connectionClose := false
-		if connHeader, ok := headers["Connection"]; ok && strings.ToLower(connHeader) == "close" {
-			connectionClose = true
-		}
-
-		// Read Body (for POST/UPDATE/DELETE)
-		var reqBody string
-		if method != "GET" && method != "HEAD" {
-			contentLength := 0
-			if cl, ok := headers["Content-Length"]; ok {
-				contentLength, _ = strconv.Atoi(cl)
-			}
-			if contentLength > 0 {
-				body := make([]byte, contentLength)
-				if _, err := io.ReadFull(reader, body); err != nil {
-					fmt.Println("Error reading body", err)
-					return
-				}
-				reqBody = string(body)
-			}
-		}
-
-		// Create Response
-		var res string
-		switch {
-		case path == "/":
-			res = "HTTP/1.1 200 OK\r\n\r\n"
-
-		case strings.HasPrefix(path, "/echo/"):
-			body := strings.TrimPrefix(path, "/echo/")
-			// save encodings into a map
-			encodingsList := strings.Split(headers["Accept-Encoding"], ", ")
-			encodings := make(map[string]bool)
-			for _, v := range encodingsList {
-				encodings[v] = true
-			}
-			if encodings["gzip"] {
-				var buf bytes.Buffer
-				gz := gzip.NewWriter(&buf)
-				_, _ = gz.Write([]byte(body))
-				gz.Close()
-				gzipBody := buf.String()
-				res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%v", len(gzipBody), gzipBody)
+				log.Printf("Client closed connection")
 			} else {
-				res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+				log.Printf("Error reading request: %v", err)
 			}
-
-		case strings.HasPrefix(path, "/user-agent"):
-			body := headers["User-Agent"]
-			res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
-
-		case strings.HasPrefix(path, "/files"):
-			dir := os.Args[2]
-			filename := strings.TrimPrefix(path, "/files/")
-			switch method {
-			case "GET":
-				dat, err := os.ReadFile(dir + filename)
-				if err != nil {
-					res = "HTTP/1.1 404 Not Found\r\n\r\n"
-				} else {
-					res = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(dat), dat)
-				}
-			case "POST":
-				err := os.WriteFile(dir+filename, []byte(reqBody), 0644)
-				if err != nil {
-					res = "HTTP/1.1 404 Not Found\r\n\r\n"
-				} else {
-					res = "HTTP/1.1 201 Created\r\n\r\n"
-				}
-			}
-		default:
-			res = "HTTP/1.1 404 Not Found\r\n\r\n"
-		}
-
-		// Write the res to the client
-		if _, err = conn.Write([]byte(res)); err != nil {
-			fmt.Println("Error writing response: ", err)
 			return
 		}
-		fmt.Println("Response succesfully sended to client.")
 
-		if connectionClose {
+		closeConnection := false
+		if connHeader, ok := reqHeaders["Connection"]; ok && strings.ToLower(connHeader) == "close" {
+			closeConnection = true
+		}
+
+		// Handle Request
+		response := handleRequest(method, path, reqHeaders, reqBody)
+
+		// Send response
+		if _, err = conn.Write([]byte(response)); err != nil {
+			log.Println("Error writing response:", err)
+			return
+		}
+		log.Println("Response successfully sent to client.")
+
+		if closeConnection {
 			return
 		}
 	}
+}
+
+func readRequest(reader *bufio.Reader) (method, path string, headers map[string]string, body []byte, err error) {
+	// Read request line
+	requestLine, err := reader.ReadString('\n')
+	if err != nil {
+		return "", "", nil, nil, err
+	}
+
+	parts := strings.Split(strings.TrimSpace(requestLine), " ")
+	method, path = parts[0], parts[1]
+
+	// Read Headers
+	headers = make(map[string]string)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) == "" {
+			break // End of headers
+		}
+
+		headerParts := strings.SplitN(strings.TrimSpace(line), ":", 2)
+		if len(headerParts) == 2 {
+			key := strings.TrimSpace(headerParts[0])
+			value := strings.TrimSpace(headerParts[1])
+			headers[key] = value
+		}
+	}
+
+	// Read Body
+	if contentLengthStr, ok := headers["Content-Length"]; ok {
+		contentLength, err := strconv.Atoi(contentLengthStr)
+		if err != nil {
+			return "", "", nil, nil, fmt.Errorf("invalid Content-Length")
+		}
+
+		if contentLength > 0 {
+			body = make([]byte, contentLength)
+			if _, err = io.ReadFull(reader, body); err != nil {
+				return "", "", nil, nil, fmt.Errorf("error reading body: %s", err)
+			}
+		}
+	}
+
+	return method, path, headers, body, nil
+}
+
+func handleRequest(method, path string, headers map[string]string, body []byte) (res string) {
+	responseHeaders := make(map[string]string)
+	responseHeaders["Connection"] = headers["Connection"]
+
+	status := http.StatusNotFound
+	var responseBody []byte
+
+	switch {
+	case path == "/":
+		status = http.StatusOK
+		responseHeaders["Content-Length"] = "0"
+
+	case strings.HasPrefix(path, "/user-agent"):
+		status = http.StatusOK
+		responseBody = []byte(headers["User-Agent"])
+		responseHeaders["Content-Type"] = "text/plain"
+		responseHeaders["Content-Length"] = fmt.Sprintf("%v", len(responseBody))
+
+	case strings.HasPrefix(path, "/echo/"):
+		status = http.StatusOK
+		responseBody = []byte(strings.TrimPrefix(path, "/echo/"))
+		responseHeaders["Content-Type"] = "text/plain"
+		responseHeaders["Content-Length"] = fmt.Sprintf("%v", len(responseBody))
+
+	case strings.HasPrefix(path, "/files"):
+		fileDir := os.Args[2]
+		fileName := filepath.Clean(strings.TrimPrefix(path, "/files/"))
+		filePath, _ := filepath.Abs(filepath.Join(fileDir, fileName))
+
+		switch method {
+		case "GET":
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				status = http.StatusNotFound
+			} else {
+				status = http.StatusOK
+				responseBody = content
+				responseHeaders["Content-Length"] = fmt.Sprintf("%v", len(responseBody))
+				responseHeaders["Content-Type"] = "application/octet-stream"
+			}
+		case "POST":
+			err := os.WriteFile(filePath, body, 0644)
+			if err != nil {
+				status = http.StatusInternalServerError
+			} else {
+				status = http.StatusCreated
+				responseHeaders["Content-Length"] = "0"
+			}
+
+		default:
+			status = http.StatusNotImplemented
+		}
+	}
+
+	if strings.Contains(headers["Accept-Encoding"], "gzip") {
+		responseHeaders["Content-Encoding"] = "gzip"
+		responseBody = compressGzip(responseBody)
+		responseHeaders["Content-Length"] = fmt.Sprintf("%v", len(responseBody))
+	}
+
+	return generateResponse(responseHeaders, status, responseBody)
+}
+
+func generateResponse(headers map[string]string, status int, body []byte) string {
+	var res strings.Builder
+
+	// status Line
+	res.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", status, http.StatusText(status)))
+
+	// headers
+	if len(body) > 0 {
+		headers["Content-Length"] = strconv.Itoa(len(body))
+	}
+	for key, value := range headers {
+		if value != "" {
+			res.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
+		}
+	}
+	res.WriteString("\r\n")
+
+	// body
+	if len(body) > 0 {
+		res.Write(body)
+	}
+
+	return res.String()
+}
+
+func compressGzip(content []byte) []byte {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write(content)
+	gz.Close()
+	return buf.Bytes()
 }
