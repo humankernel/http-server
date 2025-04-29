@@ -4,9 +4,6 @@ Change from [codecrafters/http-server](https://app.codecrafters.io/courses/http-
 
 See also the other branches :)
 
-## Features
-- 
-
 ## Todo 
 
 - Improve security (dont use req headers as res headers)
